@@ -1,0 +1,26 @@
+
+D/InsetsController(23023): hide(ime(), fromIme=false)
+I/ImeTracker(23023): com.example.basic_bg:679896e8: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+V/BackgroundService(23023): Starting flutter engine for background service
+I/flutter (23023): [IMPORTANT:flutter/shell/platform/android/android_context_gl_impeller.cc(94)] Using the Impeller rendering backend (OpenGLES).
+V/BackgroundService(23023): Service already running, using existing service
+D/VRI[MainActivity](23023): visibilityChanged oldVisibility=true newVisibility=false
+W/WindowOnBackDispatcher(23023): sendCancelIfRunning: isInProgress=false callback=android.view.ViewRootImpl$$ExternalSyntheticLambda13@7eb0328
+D/ViewRootImpl(23023): Skipping stats log for color mode
+I/EGL_emulation(23023): Opening libGLESv1_CM_emulation.so
+I/EGL_emulation(23023): Opening libGLESv2_emulation.so
+I/xample.basic_bg(23023): AssetManager2(0xb4000078c75e88f8) locale list changing from [] to [en-US]
+W/HWUI    (23023): Failed to choose config with EGL_SWAP_BEHAVIOR_PRESERVED, retrying without...
+W/HWUI    (23023): Failed to initialize 101010-2 format, error = EGL_SUCCESS
+I/flutter (23023): [IMPORTANT:flutter/shell/platform/android/android_context_gl_impeller.cc(94)] Using the Impeller rendering backend (OpenGLES).
+D/AutofillManager(23023): Fill dialog is enabled:false, hints=[]
+D/WindowLayoutComponentImpl(23023): Register WindowLayoutInfoListener on Context=com.example.basic_bg.MainActivity@2a5c3ea, of which baseContext=android.app.ContextImpl@b598451
+D/InsetsController(23023): hide(ime(), fromIme=false)
+I/ImeTracker(23023): com.example.basic_bg:10fde9d5: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+V/BackgroundService(23023): Starting flutter engine for background service
+I/flutter (23023): [IMPORTANT:flutter/shell/platform/android/android_context_gl_impeller.cc(94)] Using the Impeller rendering backend (OpenGLES).
+V/BackgroundService(23023): Service already running, using existing service
+D/VRI[MainActivity](23023): visibilityChanged oldVisibility=true newVisibility=false
+D/ViewRootImpl(23023): Skipping stats log for color mode
+D/InsetsController(23023): hide(ime(), fromIme=false)
+I/ImeTracker(23023): com.example.basic_bg:bc81f251: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
