@@ -4,7 +4,8 @@
       "Bash(find:*)",
       "WebSearch",
       "WebFetch(domain:pub.dev)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(flutter pub get:*)"
     ]
   }
 }

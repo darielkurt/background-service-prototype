@@ -41,6 +41,12 @@ dependencies:
   # Local notifications
   flutter_local_notifications: ^17.0.0
 
+  # Task persistence
+  shared_preferences: ^2.2.0
+
+  # Network connectivity detection
+  connectivity_plus: ^5.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
