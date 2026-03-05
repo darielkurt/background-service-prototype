@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/task.dart';
+import 'workmanager_service.dart';
 
 /// Manages the queue of tasks to be processed
 ///
@@ -14,6 +15,9 @@ class TaskQueue {
   TaskQueue._internal();
 
   static const String _storageKey = 'task_queue_v1';
+  static const String _lockKey = 'processing_lock_v1';
+  static const String _stopRequestKey = 'workmanager_stop_request';
+  static const int _lockTimeoutMinutes = 5;
 
   /// Add a new task to the queue
   Future<void> addTask(Task task) async {
@@ -21,6 +25,116 @@ class TaskQueue {
     tasks.add(task);
     await _saveTasks(tasks);
     print('[TaskQueue] Added task ${task.id}, total: ${tasks.length}');
+
+    // Auto-register WorkManager task when tasks are added
+    await registerPendingTasksSync();
+  }
+
+  // ============================================================
+  // PROCESSING LOCK - Prevents duplicate processing
+  // ============================================================
+
+  /// Try to acquire the processing lock
+  /// Returns true if lock was acquired, false if another processor holds it
+  Future<bool> acquireProcessingLock(String lockerId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+
+    final lockJson = prefs.getString(_lockKey);
+
+    if (lockJson != null) {
+      try {
+        final lock = jsonDecode(lockJson) as Map<String, dynamic>;
+        final existingLockerId = lock['lockerId'] as String;
+        final timestamp = DateTime.parse(lock['timestamp'] as String);
+        final age = DateTime.now().difference(timestamp);
+
+        // Check if lock is stale (older than timeout)
+        if (age.inMinutes < _lockTimeoutMinutes) {
+          print('[TaskQueue] Lock held by $existingLockerId (${age.inSeconds}s old)');
+          return false;
+        }
+        print('[TaskQueue] Stale lock from $existingLockerId expired, taking over');
+      } catch (e) {
+        print('[TaskQueue] Error parsing lock, will overwrite: $e');
+      }
+    }
+
+    // Acquire the lock
+    final lockData = {
+      'lockerId': lockerId,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+    await prefs.setString(_lockKey, jsonEncode(lockData));
+    print('[TaskQueue] Lock acquired by $lockerId');
+    return true;
+  }
+
+  /// Release the processing lock (only if we own it)
+  Future<void> releaseProcessingLock(String lockerId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+
+    final lockJson = prefs.getString(_lockKey);
+
+    if (lockJson != null) {
+      try {
+        final lock = jsonDecode(lockJson) as Map<String, dynamic>;
+        final existingLockerId = lock['lockerId'] as String;
+
+        if (existingLockerId == lockerId) {
+          await prefs.remove(_lockKey);
+          print('[TaskQueue] Lock released by $lockerId');
+        } else {
+          print('[TaskQueue] Cannot release lock - owned by $existingLockerId, not $lockerId');
+        }
+      } catch (e) {
+        print('[TaskQueue] Error releasing lock: $e');
+        await prefs.remove(_lockKey);
+      }
+    }
+  }
+
+  /// Get the current lock holder (or null if no lock)
+  Future<String?> getProcessingLockHolder() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+
+    final lockJson = prefs.getString(_lockKey);
+
+    if (lockJson == null) return null;
+
+    try {
+      final lock = jsonDecode(lockJson) as Map<String, dynamic>;
+      return lock['lockerId'] as String?;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ============================================================
+  // STOP REQUEST - Allows app to signal WorkManager to stop
+  // ============================================================
+
+  /// Request WorkManager to stop processing
+  Future<void> requestWorkManagerStop() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_stopRequestKey, true);
+    print('[TaskQueue] WorkManager stop requested');
+  }
+
+  /// Check if a stop has been requested
+  Future<bool> isStopRequested() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    return prefs.getBool(_stopRequestKey) ?? false;
+  }
+
+  /// Clear the stop request flag
+  Future<void> clearStopRequest() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_stopRequestKey);
+    print('[TaskQueue] Stop request cleared');
   }
 
   /// Get all tasks with pending status

@@ -47,6 +47,9 @@ dependencies:
   # Network connectivity monitoring
   connectivity_plus: ^5.0.0
 
+  # WorkManager for background task scheduling (survives app termination)
+  workmanager: ^0.9.0+3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

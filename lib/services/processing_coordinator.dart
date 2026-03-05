@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'foreground_task_processor.dart';
 import 'task_queue.dart';
+import 'workmanager_service.dart';
 
 /// Processing modes for task execution
 enum ProcessingMode {
@@ -49,6 +50,17 @@ class ProcessingCoordinator {
 
     print('[Coordinator] Initializing...');
 
+    // Cancel any pending WorkManager tasks since app is now in foreground
+    print('[Coordinator] Cancelling any pending WorkManager tasks...');
+    await cancelPendingTasksSync();
+
+    // Check if WorkManager is currently processing (holds the lock)
+    final lockHolder = await _taskQueue.getProcessingLockHolder();
+    if (lockHolder == 'workmanager') {
+      print('[Coordinator] WorkManager is currently processing, waiting briefly...');
+      await _waitForWorkManagerToFinish();
+    }
+
     // Listen to foreground processor completion
     _foregroundProcessor.progressStream.listen((event) {
       if (event['type'] == 'complete' || event['type'] == 'stopped') {
@@ -63,8 +75,51 @@ class ProcessingCoordinator {
       _setMode(ProcessingMode.idle);
     });
 
+    // Check if there are pending tasks and auto-start foreground processing
+    final pendingTasks = await _taskQueue.getPendingTasks();
+    if (pendingTasks.isNotEmpty) {
+      print('[Coordinator] Found ${pendingTasks.length} pending tasks on startup, starting foreground processing');
+    }
+
     _isInitialized = true;
     print('[Coordinator] Initialized');
+
+    // Start foreground processing after initialization if there are pending tasks
+    if (pendingTasks.isNotEmpty) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _startForegroundProcessing();
+    }
+  }
+
+  /// Wait for WorkManager to finish and release the lock
+  Future<void> _waitForWorkManagerToFinish() async {
+    // Signal WorkManager to stop
+    await _taskQueue.requestWorkManagerStop();
+
+    // Wait up to 2 seconds for WorkManager to release lock
+    int elapsed = 0;
+    while (elapsed < 2000) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      elapsed += 500;
+
+      final lockHolder = await _taskQueue.getProcessingLockHolder();
+      if (lockHolder != 'workmanager') {
+        print('[Coordinator] WorkManager released lock');
+        break;
+      }
+      print('[Coordinator] Still waiting for WorkManager... (${elapsed}ms)');
+    }
+
+    // Force-release the lock if WorkManager didn't respond
+    // This handles the same-isolate blocking issue
+    final lockHolder = await _taskQueue.getProcessingLockHolder();
+    if (lockHolder == 'workmanager') {
+      print('[Coordinator] Force-releasing WorkManager lock - app is taking over');
+      await _taskQueue.releaseProcessingLock('workmanager');
+    }
+
+    // Clear the stop request
+    await _taskQueue.clearStopRequest();
   }
 
   /// Handle app lifecycle state changes and trigger handoffs if needed

@@ -5,6 +5,7 @@ import 'background_service.dart';
 import 'services/processing_coordinator.dart';
 import 'services/task_queue.dart';
 import 'services/network_monitor.dart';
+import 'services/workmanager_service.dart';
 import 'models/task.dart';
 
 void main() async {
@@ -13,7 +14,10 @@ void main() async {
   // Initialize background service
   await initializeBackgroundService();
 
-  // Initialize processing coordinator
+  // Initialize WorkManager for "Submit and Forget" functionality
+  await initializeWorkManager();
+
+  // Initialize processing coordinator (handles WorkManager takeover)
   await ProcessingCoordinator().initialize();
 
   // Initialize network monitor
