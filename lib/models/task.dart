@@ -1,75 +1,50 @@
-// Task status enum
+/// Status of a task in the processing queue
 enum TaskStatus {
-  pending,
-  processing,
-  complete,
-  failed;
-
-  // Serialize to string for JSON
-  String toJson() => name;
-
-  // Deserialize from string
-  static TaskStatus fromJson(String value) {
-    return TaskStatus.values.firstWhere((e) => e.name == value);
-  }
+  pending,    // Waiting to be processed
+  processing, // Currently being processed
+  complete,   // Successfully processed
 }
 
-// Task model
+/// Represents a task that can be processed either in foreground or background
 class Task {
   final String id;
-  final TaskStatus status;
+  TaskStatus status;
+  final Map<String, dynamic> data;
   final DateTime createdAt;
-  final Map<String, dynamic>? data;
 
   Task({
     required this.id,
-    required this.status,
-    required this.createdAt,
-    this.data,
-  });
-
-  // Factory constructor for creating new pending tasks
-  factory Task.create({Map<String, dynamic>? data}) {
-    return Task(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      status: TaskStatus.pending,
-      createdAt: DateTime.now(),
-      data: data,
-    );
-  }
-
-  // Copy with method for updating status
-  Task copyWith({
-    String? id,
-    TaskStatus? status,
+    this.status = TaskStatus.pending,
+    this.data = const {},
     DateTime? createdAt,
-    Map<String, dynamic>? data,
-  }) {
+  }) : createdAt = createdAt ?? DateTime.now();
+
+  /// Create a copy with updated status
+  Task copyWith({TaskStatus? status}) {
     return Task(
-      id: id ?? this.id,
+      id: id,
       status: status ?? this.status,
-      createdAt: createdAt ?? this.createdAt,
-      data: data ?? this.data,
+      data: data,
+      createdAt: createdAt,
     );
   }
 
-  // Serialize to JSON
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'status': status.toJson(),
-      'createdAt': createdAt.toIso8601String(),
-      'data': data,
-    };
-  }
+  /// Serialize to JSON for persistence
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'status': status.name,
+    'data': data,
+    'createdAt': createdAt.toIso8601String(),
+  };
 
-  // Deserialize from JSON
-  factory Task.fromJson(Map<String, dynamic> json) {
-    return Task(
-      id: json['id'] as String,
-      status: TaskStatus.fromJson(json['status'] as String),
-      createdAt: DateTime.parse(json['createdAt'] as String),
-      data: json['data'] as Map<String, dynamic>?,
-    );
-  }
+  /// Deserialize from JSON
+  factory Task.fromJson(Map<String, dynamic> json) => Task(
+    id: json['id'] as String,
+    status: TaskStatus.values.byName(json['status'] as String),
+    data: (json['data'] as Map<String, dynamic>?) ?? {},
+    createdAt: DateTime.parse(json['createdAt'] as String),
+  );
+
+  @override
+  String toString() => 'Task(id: $id, status: ${status.name})';
 }

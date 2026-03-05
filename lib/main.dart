@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'background_service.dart';
+import 'services/processing_coordinator.dart';
 import 'services/task_queue.dart';
-import 'services/network_listener.dart';
+import 'services/network_monitor.dart';
 import 'models/task.dart';
 
 void main() async {
@@ -11,6 +12,12 @@ void main() async {
 
   // Initialize background service
   await initializeBackgroundService();
+
+  // Initialize processing coordinator
+  await ProcessingCoordinator().initialize();
+
+  // Initialize network monitor
+  await NetworkMonitor().initialize();
 
   runApp(const MyApp());
 }
@@ -41,374 +48,366 @@ class BackgroundWorkDemo extends StatefulWidget {
 class _BackgroundWorkDemoState extends State<BackgroundWorkDemo>
     with WidgetsBindingObserver {
   final FlutterBackgroundService _service = FlutterBackgroundService();
+  final ProcessingCoordinator _coordinator = ProcessingCoordinator();
   final TaskQueue _taskQueue = TaskQueue();
-  final NetworkListener _networkListener = NetworkListener();
+  final NetworkMonitor _networkMonitor = NetworkMonitor();
 
-  List<Task> _allTasks = [];
+  String _status = 'Ready';
+  int _currentTask = 0;
+  int _totalTasks = 0;
+  bool _isWorking = false;
   int _pendingCount = 0;
-  int _completedCount = 0;
-  bool _isOnline = false;
+  int _taskIdCounter = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _listenToService();
-    _startNetworkListener();
-    _loadTasks();
+    _listenToForegroundProcessor();
+    _updateQueueStatus();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _networkListener.stopListening();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    print('[UI] App lifecycle changed: $state');
+    print('[Main] App lifecycle changed: $state');
+    _coordinator.handleAppLifecycleChange(state);
+
+    // Update network monitor's foreground state
+    final isInForeground = state == AppLifecycleState.resumed;
+    _networkMonitor.setForegroundState(isInForeground);
+
+    // Update UI when app resumes
     if (state == AppLifecycleState.resumed) {
-      print('[UI] App resumed - reloading tasks');
-      _loadTasks();
+      _updateQueueStatus();
+      _updateProcessingState();
     }
   }
 
   void _listenToService() {
-    // Listen for progress updates
+    // Listen for background service progress updates
     _service.on('progress').listen((event) {
-      if (mounted) {
-        // Reload tasks to show updated statuses
-        _loadTasks();
-      }
-    });
-
-    // Listen for completion
-    _service.on('workComplete').listen((event) {
-      if (mounted) {
-        _loadTasks();
-      }
-    });
-  }
-
-  // Start network listener
-  Future<void> _startNetworkListener() async {
-    await _networkListener.startListening();
-
-    // Check initial connectivity status
-    final result = await Connectivity().checkConnectivity();
-    setState(() {
-      _isOnline = result == ConnectivityResult.wifi ||
-          result == ConnectivityResult.mobile;
-    });
-
-    // Listen for connectivity changes in UI
-    Connectivity().onConnectivityChanged.listen((result) {
-      if (mounted) {
+      if (mounted && event != null) {
         setState(() {
-          _isOnline = result == ConnectivityResult.wifi ||
-              result == ConnectivityResult.mobile;
+          _currentTask = event['current'] ?? 0;
+          _totalTasks = event['total'] ?? 10;
+          _status = 'Background: Task $_currentTask/$_totalTasks';
+          _isWorking = true;
         });
       }
     });
+
+    // Listen for background service completion
+    _service.on('workComplete').listen((event) {
+      if (mounted) {
+        setState(() {
+          _status = 'Background work complete!';
+          _isWorking = false;
+        });
+        _updateQueueStatus();
+      }
+    });
   }
 
-  // Load tasks from storage
-  Future<void> _loadTasks() async {
-    print('[UI] Loading tasks from storage...');
-    final tasks = await _taskQueue.getAllTasks();
-    final pending = tasks.where((t) => t.status == TaskStatus.pending).length;
-    final completed =
-        tasks.where((t) => t.status == TaskStatus.complete).length;
+  void _listenToForegroundProcessor() {
+    // Listen for foreground processor progress updates
+    _coordinator.foregroundProcessor.progressStream.listen((event) {
+      if (mounted) {
+        final type = event['type'];
+        if (type == 'progress') {
+          setState(() {
+            _currentTask = event['current'] ?? 0;
+            _totalTasks = event['total'] ?? 0;
+            _status = 'Foreground: Task $_currentTask/$_totalTasks';
+            _isWorking = true;
+          });
+        } else if (type == 'complete') {
+          setState(() {
+            _status = 'Foreground work complete!';
+            _isWorking = false;
+          });
+          _updateQueueStatus();
+        } else if (type == 'stopped') {
+          setState(() {
+            _status = 'Foreground stopped (handoff)';
+            _isWorking = false;
+          });
+        }
+      }
+    });
+  }
 
-    print('[UI] Loaded ${tasks.length} tasks: $pending pending, $completed completed');
-
+  Future<void> _updateQueueStatus() async {
+    final pending = await _taskQueue.getPendingTasks();
     if (mounted) {
       setState(() {
-        // Reverse so newest tasks appear first
-        _allTasks = tasks.reversed.toList();
-        _pendingCount = pending;
-        _completedCount = completed;
+        _pendingCount = pending.length;
       });
     }
   }
 
-  // Queue a new task
-  Future<void> _queueTask() async {
-    print('[UI] Queueing new task...');
-    final newTask = Task.create(
-      data: {'index': _allTasks.length + 1},
-    );
+  void _updateProcessingState() {
+    setState(() {
+      _isWorking = _coordinator.isProcessing;
+    });
+  }
 
-    await _taskQueue.addTask(newTask);
-    print('[UI] Task added to queue');
-    await _loadTasks();
-    print('[UI] Tasks reloaded, isOnline: $_isOnline');
+  Future<void> _requestNotificationPermission() async {
+    final FlutterLocalNotificationsPlugin notificationsPlugin =
+        FlutterLocalNotificationsPlugin();
 
-    // If online, trigger service immediately
-    if (_isOnline) {
-      print('[UI] Device is online, triggering service...');
-      await _networkListener.triggerServiceIfNeeded();
-      print('[UI] Service trigger completed');
-    } else {
-      print('[UI] Device is offline, waiting for network');
+    final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+        notificationsPlugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+
+    final bool? granted =
+        await androidImplementation?.requestNotificationsPermission();
+
+    if (granted == false) {
+      if (mounted) {
+        setState(() {
+          _status = 'Notification permission denied';
+        });
+      }
     }
   }
 
-  // Clear completed tasks
-  Future<void> _clearCompleted() async {
-    await _taskQueue.clearCompletedTasks();
-    await _loadTasks();
+  Future<void> _addTask() async {
+    _taskIdCounter++;
+    final task = Task(id: 'task_$_taskIdCounter');
+    await _taskQueue.addTask(task);
+    await _updateQueueStatus();
+    if (mounted) {
+      setState(() {
+        _status = 'Added task ${task.id}';
+      });
+    }
   }
 
-  // Debug: Force start service
-  Future<void> _forceStartService() async {
-    print('[UI] FORCE STARTING SERVICE (debug)');
-    await _service.startService();
-    print('[UI] Force start completed');
+  Future<void> _addMultipleTasks() async {
+    for (int i = 0; i < 5; i++) {
+      _taskIdCounter++;
+      final task = Task(id: 'task_$_taskIdCounter');
+      await _taskQueue.addTask(task);
+    }
+    await _updateQueueStatus();
+    if (mounted) {
+      setState(() {
+        _status = 'Added 5 tasks';
+      });
+    }
+  }
+
+  Future<void> _startProcessing() async {
+    await _requestNotificationPermission();
+
+    if (_coordinator.isProcessing) {
+      setState(() {
+        _status = 'Already processing';
+      });
+      return;
+    }
+
+    setState(() {
+      _status = 'Starting processing...';
+      _isWorking = true;
+    });
+
+    // Start processing in foreground (app is visible)
+    await _coordinator.startProcessingIfNeeded(isInForeground: true);
+  }
+
+  Future<void> _stopProcessing() async {
+    if (_coordinator.currentMode == ProcessingMode.foreground) {
+      await _coordinator.foregroundProcessor.stopProcessing();
+    } else if (_coordinator.currentMode == ProcessingMode.background) {
+      _service.invoke('stop');
+    }
+    setState(() {
+      _isWorking = false;
+      _status = 'Stopped';
+    });
+  }
+
+  Future<void> _clearTasks() async {
+    await _taskQueue.clearAll();
+    await _updateQueueStatus();
+    setState(() {
+      _status = 'Cleared all tasks';
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final progress =
+        _totalTasks > 0 ? _currentTask / _totalTasks : 0.0;
+    final modeText = _coordinator.currentMode.name;
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text('Task Queue Demo'),
+        title: const Text('Background Work POC'),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Network status indicator
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: _isOnline ? Colors.green[100] : Colors.red[100],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: _isOnline ? Colors.green : Colors.red,
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Phase 2: Coordinator Demo',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+
+              // Queue Status
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.orange[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      'Pending Tasks: $_pendingCount',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text('Mode: $modeText'),
+                  ],
                 ),
               ),
-              child: Row(
+              const SizedBox(height: 16),
+
+              // Add Task Buttons
+              Row(
                 children: [
-                  Icon(
-                    _isOnline ? Icons.wifi : Icons.wifi_off,
-                    color: _isOnline ? Colors.green : Colors.red,
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _addTask,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add 1 Task'),
+                    ),
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    _isOnline ? 'Online' : 'Offline',
-                    style: TextStyle(
-                      color: _isOnline ? Colors.green[900] : Colors.red[900],
-                      fontWeight: FontWeight.bold,
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _addMultipleTasks,
+                      icon: const Icon(Icons.add_box),
+                      label: const Text('Add 5 Tasks'),
                     ),
                   ),
                 ],
               ),
-            ),
-
-            const SizedBox(height: 16),
-
-            // Task statistics
-            Row(
-              children: [
-                Expanded(
-                  child: _buildStatCard(
-                    'Pending',
-                    _pendingCount.toString(),
-                    Colors.orange,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildStatCard(
-                    'Completed',
-                    _completedCount.toString(),
-                    Colors.green,
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 16),
-
-            // Action buttons
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _queueTask,
-                    icon: const Icon(Icons.add),
-                    label: const Text('Queue Task'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.all(16),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _completedCount > 0 ? _clearCompleted : null,
-                    icon: const Icon(Icons.clear),
-                    label: const Text('Clear Done'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.all(16),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 12),
-
-            // Debug button
-            OutlinedButton.icon(
-              onPressed: _forceStartService,
-              icon: const Icon(Icons.bug_report),
-              label: const Text('DEBUG: Force Start'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.all(12),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _clearTasks,
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Clear All Tasks'),
               ),
-            ),
+              const SizedBox(height: 24),
 
-            const SizedBox(height: 24),
-
-            // Task list
-            const Text(
-              'All Tasks',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-
-            Expanded(
-              child: _allTasks.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'No tasks yet.\nTap "Queue Task" to add one!',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey),
+              // Status
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey[200],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      'Status: $_status',
+                      style: const TextStyle(fontSize: 18),
+                      textAlign: TextAlign.center,
+                    ),
+                    if (_isWorking) ...[
+                      const SizedBox(height: 20),
+                      LinearProgressIndicator(value: progress),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${(progress * 100).toInt()}% complete',
+                        style: const TextStyle(fontSize: 14),
                       ),
-                    )
-                  : ListView.builder(
-                      itemCount: _allTasks.length,
-                      itemBuilder: (context, index) {
-                        final task = _allTasks[index];
-                        return _buildTaskCard(task);
-                      },
-                    ),
-            ),
-
-            const SizedBox(height: 16),
-
-            // Instructions
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue[50],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.blue),
+                    ],
+                  ],
+                ),
               ),
-              child: const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Submit & Forget:',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+              const SizedBox(height: 24),
+
+              // Start/Stop Buttons
+              ElevatedButton.icon(
+                onPressed: _isWorking ? null : _startProcessing,
+                icon: const Icon(Icons.play_arrow),
+                label: const Text('Start Processing'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 16,
                   ),
-                  SizedBox(height: 4),
-                  Text('1. Go offline, queue tasks',
-                      style: TextStyle(fontSize: 12)),
-                  Text('2. Close app completely',
-                      style: TextStyle(fontSize: 12)),
-                  Text('3. Go online → auto-starts!',
-                      style: TextStyle(fontSize: 12)),
-                ],
+                ),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+              const SizedBox(height: 8),
+              if (_isWorking)
+                OutlinedButton.icon(
+                  onPressed: _stopProcessing,
+                  icon: const Icon(Icons.stop),
+                  label: const Text('Stop'),
+                ),
+              const SizedBox(height: 24),
 
-  Widget _buildStatCard(String label, String value, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withAlpha((255 * 0.1).toInt()),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color),
-      ),
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
+              // Instructions
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue),
+                ),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Test Instructions:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text('1. Add tasks using the buttons above'),
+                    Text('2. Tap "Start Processing"'),
+                    Text('3. Watch foreground processing in the UI'),
+                    Text('4. Background the app - should handoff'),
+                    Text('5. Return to app - should handoff back'),
+                    SizedBox(height: 8),
+                    Text(
+                      'Note: Background still uses simulated tasks. '
+                      'Foreground uses the task queue.',
+                      style: TextStyle(
+                        fontStyle: FontStyle.italic,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 14,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTaskCard(Task task) {
-    IconData icon;
-    Color color;
-
-    switch (task.status) {
-      case TaskStatus.pending:
-        icon = Icons.schedule;
-        color = Colors.orange;
-        break;
-      case TaskStatus.processing:
-        icon = Icons.sync;
-        color = Colors.blue;
-        break;
-      case TaskStatus.complete:
-        icon = Icons.check_circle;
-        color = Colors.green;
-        break;
-      case TaskStatus.failed:
-        icon = Icons.error;
-        color = Colors.red;
-        break;
-    }
-
-    return Card(
-      child: ListTile(
-        leading: Icon(icon, color: color),
-        title: Text('Task #${task.data?['index'] ?? '?'}'),
-        subtitle: Text(
-          task.status.name.toUpperCase(),
-          style: TextStyle(color: color, fontWeight: FontWeight.bold),
-        ),
-        trailing: Text(
-          _formatTime(task.createdAt),
-          style: const TextStyle(fontSize: 12, color: Colors.grey),
         ),
       ),
     );
-  }
-
-  String _formatTime(DateTime time) {
-    final now = DateTime.now();
-    final diff = now.difference(time);
-
-    if (diff.inMinutes < 1) return 'Just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    return '${diff.inDays}d ago';
   }
 }

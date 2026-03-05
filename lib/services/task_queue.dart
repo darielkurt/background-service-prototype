@@ -2,87 +2,116 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/task.dart';
 
+/// Manages the queue of tasks to be processed
+///
+/// Uses SharedPreferences for persistence so that:
+/// 1. Tasks survive app restarts
+/// 2. Background isolate can access the same queue as foreground
 class TaskQueue {
-  static const String _tasksKey = 'background_tasks';
-
-  // Singleton pattern - ensures same instance across app
+  // Singleton pattern
   static final TaskQueue _instance = TaskQueue._internal();
   factory TaskQueue() => _instance;
   TaskQueue._internal();
 
-  // Add a new task
+  static const String _storageKey = 'task_queue_v1';
+
+  /// Add a new task to the queue
   Future<void> addTask(Task task) async {
-    print('[TaskQueue] Adding task ${task.id}');
-    final prefs = await SharedPreferences.getInstance();
-    final tasks = await _loadTasks(prefs);
+    final tasks = await getAllTasks();
     tasks.add(task);
-    await _saveTasks(prefs, tasks);
-    print('[TaskQueue] Task ${task.id} saved. Total tasks: ${tasks.length}');
+    await _saveTasks(tasks);
+    print('[TaskQueue] Added task ${task.id}, total: ${tasks.length}');
   }
 
-  // Get all tasks
-  Future<List<Task>> getAllTasks() async {
-    final prefs = await SharedPreferences.getInstance();
-    return _loadTasks(prefs);
-  }
-
-  // Get only pending tasks
+  /// Get all tasks with pending status
   Future<List<Task>> getPendingTasks() async {
     final tasks = await getAllTasks();
-    final pending = tasks.where((t) => t.status == TaskStatus.pending).toList();
-    print('[TaskQueue] getPendingTasks: ${pending.length} pending out of ${tasks.length} total');
-    return pending;
+    return tasks.where((t) => t.status == TaskStatus.pending).toList();
   }
 
-  // Update task status by ID
-  Future<void> updateTaskStatus(String taskId, TaskStatus status) async {
+  /// Get all tasks regardless of status
+  ///
+  /// IMPORTANT: Calls reload() to ensure we get fresh data from disk,
+  /// not cached data. This is critical for cross-isolate consistency.
+  Future<List<Task>> getAllTasks() async {
     final prefs = await SharedPreferences.getInstance();
-    final tasks = await _loadTasks(prefs);
 
-    final index = tasks.indexWhere((t) => t.id == taskId);
-    if (index != -1) {
-      tasks[index] = tasks[index].copyWith(status: status);
-      await _saveTasks(prefs, tasks);
+    // CRITICAL: Reload to get fresh data from disk (not cached)
+    // This ensures foreground sees background's updates and vice versa
+    await prefs.reload();
+
+    final json = prefs.getString(_storageKey);
+
+    if (json == null || json.isEmpty) {
+      return [];
+    }
+
+    try {
+      final list = jsonDecode(json) as List;
+      return list.map((e) => Task.fromJson(e as Map<String, dynamic>)).toList();
+    } catch (e) {
+      print('[TaskQueue] Error loading tasks: $e');
+      return [];
     }
   }
 
-  // Get task count by status
-  Future<int> getTaskCountByStatus(TaskStatus status) async {
+  /// Get a specific task by ID
+  Future<Task?> getTask(String taskId) async {
+    final tasks = await getAllTasks();
+    try {
+      return tasks.firstWhere((t) => t.id == taskId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Update the status of a task
+  Future<void> updateTaskStatus(String taskId, TaskStatus status) async {
+    final tasks = await getAllTasks();
+    final index = tasks.indexWhere((t) => t.id == taskId);
+
+    if (index != -1) {
+      tasks[index].status = status;
+      await _saveTasks(tasks);
+      print('[TaskQueue] Task $taskId status -> ${status.name}');
+    } else {
+      print('[TaskQueue] WARNING: Task $taskId not found for status update');
+    }
+  }
+
+  /// Remove all completed tasks
+  Future<void> clearCompleted() async {
+    final tasks = await getAllTasks();
+    final before = tasks.length;
+    tasks.removeWhere((t) => t.status == TaskStatus.complete);
+    await _saveTasks(tasks);
+    final removed = before - tasks.length;
+    print('[TaskQueue] Cleared $removed completed tasks');
+  }
+
+  /// Remove all tasks
+  Future<void> clearAll() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_storageKey);
+    print('[TaskQueue] Cleared all tasks');
+  }
+
+  /// Get count of tasks by status
+  Future<int> countByStatus(TaskStatus status) async {
     final tasks = await getAllTasks();
     return tasks.where((t) => t.status == status).length;
   }
 
-  // Clear completed tasks
-  Future<void> clearCompletedTasks() async {
+  /// Get total task count
+  Future<int> getTotalCount() async {
+    final tasks = await getAllTasks();
+    return tasks.length;
+  }
+
+  /// Save tasks to SharedPreferences
+  Future<void> _saveTasks(List<Task> tasks) async {
     final prefs = await SharedPreferences.getInstance();
-    final tasks = await _loadTasks(prefs);
-    final activeTasks = tasks
-        .where((t) =>
-            t.status != TaskStatus.complete && t.status != TaskStatus.failed)
-        .toList();
-    await _saveTasks(prefs, activeTasks);
-  }
-
-  // Clear all tasks (for testing)
-  Future<void> clearAllTasks() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_tasksKey);
-  }
-
-  // Private: Load tasks from shared_preferences
-  Future<List<Task>> _loadTasks(SharedPreferences prefs) async {
-    final String? tasksJson = prefs.getString(_tasksKey);
-    if (tasksJson == null || tasksJson.isEmpty) {
-      return [];
-    }
-
-    final List<dynamic> tasksList = jsonDecode(tasksJson);
-    return tasksList.map((json) => Task.fromJson(json)).toList();
-  }
-
-  // Private: Save tasks to shared_preferences
-  Future<void> _saveTasks(SharedPreferences prefs, List<Task> tasks) async {
-    final tasksJson = jsonEncode(tasks.map((t) => t.toJson()).toList());
-    await prefs.setString(_tasksKey, tasksJson);
+    final json = jsonEncode(tasks.map((t) => t.toJson()).toList());
+    await prefs.setString(_storageKey, json);
   }
 }
