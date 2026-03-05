@@ -41,6 +41,9 @@ dependencies:
   # Local notifications
   flutter_local_notifications: ^17.0.0
 
+  # Persistence for task queue
+  shared_preferences: ^2.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
