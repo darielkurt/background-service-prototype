@@ -4,6 +4,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'background_service.dart';
 import 'services/processing_coordinator.dart';
 import 'services/task_queue.dart';
+import 'services/network_monitor.dart';
 import 'models/task.dart';
 
 void main() async {
@@ -14,6 +15,9 @@ void main() async {
 
   // Initialize processing coordinator
   await ProcessingCoordinator().initialize();
+
+  // Initialize network monitor
+  await NetworkMonitor().initialize();
 
   runApp(const MyApp());
 }
@@ -46,6 +50,7 @@ class _BackgroundWorkDemoState extends State<BackgroundWorkDemo>
   final FlutterBackgroundService _service = FlutterBackgroundService();
   final ProcessingCoordinator _coordinator = ProcessingCoordinator();
   final TaskQueue _taskQueue = TaskQueue();
+  final NetworkMonitor _networkMonitor = NetworkMonitor();
 
   String _status = 'Ready';
   int _currentTask = 0;
@@ -73,6 +78,10 @@ class _BackgroundWorkDemoState extends State<BackgroundWorkDemo>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     print('[Main] App lifecycle changed: $state');
     _coordinator.handleAppLifecycleChange(state);
+
+    // Update network monitor's foreground state
+    final isInForeground = state == AppLifecycleState.resumed;
+    _networkMonitor.setForegroundState(isInForeground);
 
     // Update UI when app resumes
     if (state == AppLifecycleState.resumed) {

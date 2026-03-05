@@ -2,38 +2,28 @@
 
 ## Current State
 
-Phase 2 is complete:
+Phase 2 + 2F complete:
 - ✅ Task model with persistence
 - ✅ TaskQueue with SharedPreferences
 - ✅ Foreground processing with UI
 - ✅ Background processing with notifications
 - ✅ Bidirectional handoff (foreground ↔ background)
 - ✅ Cross-isolate state consistency
+- ✅ Network detection (auto-trigger on connection restore)
 
 ---
 
 ## Recommended Next Steps
 
-### Priority 1: Network Detection (Phase 2F)
+### ~~Priority 1: Network Detection (Phase 2F)~~ ✅ COMPLETE
 
-**Goal:** Auto-trigger processing when network becomes available.
+Implemented in `lib/services/network_monitor.dart`. See IMPLEMENTATION.md for details.
 
-**Implementation:**
-1. Add `connectivity_plus: ^5.0.0` to pubspec.yaml
-2. Create `lib/services/network_monitor.dart`
-3. Listen for connectivity changes
-4. When: disconnected → connected AND pending tasks exist → trigger coordinator
-
-**Files to create/modify:**
-- `lib/services/network_monitor.dart` (new)
-- `lib/main.dart` (initialize monitor)
-- `pubspec.yaml` (add dependency)
-
-**Effort:** Low-Medium
+**Limitation:** Only works while app is in memory. For auto-start after app termination, WorkManager integration is needed (see Priority 5).
 
 ---
 
-### Priority 2: Real Task Payloads
+### Priority 1: Real Task Payloads
 
 **Goal:** Tasks carry actual data (not just IDs).
 
@@ -123,6 +113,13 @@ Use Android's WorkManager for guaranteed execution:
 - Survives device restart
 - OS handles scheduling
 - Better battery optimization
+- **Required for:** Auto-start background processing after app termination when network restores
+
+**Current limitation:** NetworkMonitor only works while app is in memory. WorkManager would enable:
+1. Queue tasks offline
+2. App terminated
+3. Go online
+4. WorkManager triggers background service automatically
 
 **Effort:** Medium-High
 
@@ -139,13 +136,14 @@ Move heavy processing to backend:
 
 ## Suggested Implementation Order
 
-| Step | Feature | Effort | Impact |
-|------|---------|--------|--------|
-| 1 | Real task payloads | Low | High |
-| 2 | Network detection | Low-Medium | High |
-| 3 | Error handling | Medium | High |
-| 4 | Notification tap | Low-Medium | Medium |
-| 5 | IPC improvements | Medium | Low |
+| Step | Feature | Effort | Impact | Status |
+|------|---------|--------|--------|--------|
+| 1 | Network detection | Low-Medium | High | ✅ Done |
+| 2 | Real task payloads | Low | High | Pending |
+| 3 | Error handling | Medium | High | Pending |
+| 4 | Notification tap | Low-Medium | Medium | Pending |
+| 5 | WorkManager (offline→online) | Medium-High | High | Pending |
+| 6 | IPC improvements | Medium | Low | Pending |
 
 ---
 

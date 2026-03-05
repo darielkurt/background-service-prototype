@@ -14,7 +14,7 @@ Future<void> initializeBackgroundService() async {
     'background_service_channel',
     'Background Service',
     description: 'Shows progress of background work',
-    importance: Importance.low,
+    importance: Importance.defaultImportance,
   );
 
   final FlutterLocalNotificationsPlugin notificationsPlugin =
@@ -67,7 +67,7 @@ void onStart(ServiceInstance service) async {
     'background_service_channel',
     'Background Service',
     description: 'Shows progress of background work',
-    importance: Importance.low,
+    importance: Importance.defaultImportance,
   );
 
   await notificationsPlugin
@@ -229,7 +229,7 @@ Future<void> _showNotification(
         'background_service_channel',
         'Background Service',
         channelDescription: 'Shows progress of background work',
-        importance: Importance.low,
+        importance: Importance.defaultImportance,
         icon: '@mipmap/ic_launcher',
         ongoing: true,
         showProgress: progress != null && progress < 100,

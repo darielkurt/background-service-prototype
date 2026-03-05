@@ -44,6 +44,9 @@ dependencies:
   # Persistence for task queue
   shared_preferences: ^2.2.0
 
+  # Network connectivity monitoring
+  connectivity_plus: ^5.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

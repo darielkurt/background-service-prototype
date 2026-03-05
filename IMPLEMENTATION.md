@@ -1,4 +1,4 @@
-# Phase 2 Implementation Summary
+# Phase 2 Implementation Summary (Updated with Phase 2F)
 
 ## Overview
 
@@ -188,11 +188,13 @@ All test cases passed:
 
 1. **Warning on startup:** `flutter_background_service_android` throws a warning about main isolate usage. This is cosmetic and doesn't affect functionality.
 
-2. **No network detection:** Tasks must be manually triggered. Auto-trigger on network restoration is not implemented.
+2. ~~**No network detection:**~~ ✅ Implemented in Phase 2F (see below)
 
 3. **No retry logic:** If a task fails, there's no retry mechanism.
 
 4. **Simple task model:** Tasks only have ID and status. No payload processing.
+
+5. **Network detection requires app running:** Auto-trigger only works while app is in memory. See "Future: WorkManager" below.
 
 ---
 
@@ -203,6 +205,7 @@ dependencies:
   flutter_background_service: ^5.0.0
   flutter_local_notifications: ^17.0.0
   shared_preferences: ^2.2.0
+  connectivity_plus: ^5.0.0  # Added in Phase 2F
 ```
 
 ---
@@ -214,8 +217,135 @@ dependencies:
 flutter run
 
 # Watch logs
-adb logcat | grep -E "(Coordinator|BackgroundService|ForegroundProcessor|TaskQueue)"
+adb logcat | grep -E "(Coordinator|BackgroundService|ForegroundProcessor|TaskQueue|NetworkMonitor)"
 
-# Clear app data for fresh test
+# Clear app data for fresh test (required after changing notification settings)
 adb shell pm clear com.example.basic_bg
 ```
+
+---
+
+# Phase 2F: Network Detection
+
+## Overview
+
+Implemented auto-trigger processing when network connection is restored.
+
+---
+
+## Files Created/Modified
+
+### New Files
+
+#### `lib/services/network_monitor.dart`
+- Singleton service monitoring network connectivity
+- Uses `connectivity_plus` package
+- Tracks `_wasDisconnected` state to detect restore events
+- Triggers `ProcessingCoordinator.startProcessingIfNeeded()` when:
+  - Connection restored (disconnected → connected)
+  - AND pending tasks exist
+
+### Modified Files
+
+#### `lib/main.dart`
+- Import `NetworkMonitor`
+- Initialize in `main()` after `ProcessingCoordinator`
+- Call `_networkMonitor.setForegroundState()` in `didChangeAppLifecycleState()`
+
+#### `lib/background_service.dart`
+- Changed notification `Importance.low` → `Importance.defaultImportance` (3 places)
+- Fixes inconsistent notification display on some Android versions
+
+#### `pubspec.yaml`
+- Added `connectivity_plus: ^5.0.0`
+
+---
+
+## How It Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     NetworkMonitor                           │
+│  - Subscribes to connectivity_plus stream                   │
+│  - Tracks _wasDisconnected state                            │
+│  - Tracks _isInForeground state (from lifecycle)            │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          │ Connection restored?
+                          │ Pending tasks exist?
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│              ProcessingCoordinator                           │
+│  startProcessingIfNeeded(isInForeground: true/false)        │
+│  - If foreground → start ForegroundProcessor                │
+│  - If background → start BackgroundService                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Test Cases
+
+| Test | Steps | Expected | Status |
+|------|-------|----------|--------|
+| Basic connectivity | Toggle airplane mode | Logs show "Connection RESTORED" / "Connection LOST" | ✅ |
+| Auto-trigger (foreground) | Add tasks → airplane ON → airplane OFF | Processing starts automatically | ✅ |
+| Auto-trigger (background) | Add tasks → airplane ON → background app → airplane OFF → resume | Processing starts automatically | ✅ |
+| Handoff with notification | Start processing → background app | Notification appears consistently | ✅ (after importance fix) |
+
+---
+
+## Bug Fix: Inconsistent Notifications
+
+**Problem:** Background service notification sometimes didn't appear.
+
+**Cause:** `Importance.low` notifications can be suppressed by Android.
+
+**Fix:** Changed to `Importance.defaultImportance` in 3 locations:
+- `initializeBackgroundService()` - channel creation
+- `onStart()` - channel creation in isolate
+- `_showNotification()` - notification display
+
+**Note:** After changing notification importance, must clear app data:
+```bash
+adb shell pm clear com.example.basic_bg
+```
+
+---
+
+## Limitation: App Must Be Running
+
+The current implementation only detects network changes **while the app is in memory** (foreground or background).
+
+**Scenario NOT supported:**
+1. Queue tasks offline
+2. Terminate app completely
+3. Go online
+4. ❌ Background service does NOT auto-start
+
+**Why:** When app is terminated, no Dart code is running to listen for connectivity changes.
+
+---
+
+## Future: WorkManager Integration
+
+To support auto-start after app termination, implement Android WorkManager:
+
+```
+App running → queue tasks → register WorkManager task
+                              ↓
+                     App terminated
+                              ↓
+              Android detects network restored
+                              ↓
+              WorkManager triggers our callback
+                              ↓
+              Callback starts background service
+```
+
+**Required:**
+- Add `workmanager` Flutter package
+- Register callback with network constraint
+- Callback checks for pending tasks and starts service
+
+**Effort:** Medium-High (requires careful testing)
